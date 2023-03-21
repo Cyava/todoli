@@ -1,6 +1,7 @@
 #include "inc.hpp"
 
 #include "Button.hpp"
+#include "MouseState.hpp"
 #include "Mnemosyne.hpp"
 #include "Task.hpp"
 
@@ -10,74 +11,23 @@
 #include <SFML/Graphics.hpp>
 #include <TGUI/TGUI.hpp>
 
+#include "dwmapi.h"
+#include "winuser.h"
+#include "wtypes.h"
+
 
 using namespace std;
 
 
 std::vector<Task> tasks;
+unique_vector<std::string> ttags;
 
 Task task_sel;
 std::string task_seluid;
 
-
-const int GRAB_KEY_NONE = -1;
-const int GRAB_KEY_UNUSED = 0;
-const int GRAB_KEY_TASK = 1;
-const int GRAB_KEY_TASKBUTTON = 2;
-const int GRAB_KEY_MENUBAR = 3;
-const int GRAB_KEY_SCROLLBAR = 4;
+sf::Vector2f winscale(1, 1);
 
 
-struct MouseState
-{
-	enum class ButtonState { Up, Pressed, Held, Released };
-
-	sf::Vector2i gpos;
-	sf::Vector2i pos;
-	sf::Vector2i delta;
-
-	int grabbed_key = GRAB_KEY_NONE;		// what type of thing has the mouse grabbed?
-	int grabbed_id = -1;		// what has the mouse grabbed?
-	int grabbed_id_sub = -1;	// in case we're not really sure
-
-	ButtonState buttons[3];
-
-
-	MouseState()
-	{
-		buttons[0] = ButtonState::Up;
-		buttons[1] = ButtonState::Up;
-		buttons[2] = ButtonState::Up;
-	}
-
-
-	void Update(sf::Vector2i _pos, sf::RenderWindow* window)
-	{
-		//cout << _pos.x << ", " << _pos.y << endl;
-
-		delta.x = _pos.x - gpos.x;
-		delta.y = _pos.y - gpos.y;
-
-		gpos = _pos;
-		pos = sf::Vector2i(_pos.x - window->getPosition().x, _pos.y - window->getPosition().y);
-
-
-		for (int i = 0; i < 3; i++)
-		{
-			if (buttons[i] == ButtonState::Pressed)
-			{
-				buttons[i] = ButtonState::Held;
-			}
-			else if (buttons[i] == ButtonState::Released)
-			{
-				buttons[i] = ButtonState::Up;
-
-				grabbed_key = GRAB_KEY_NONE;
-				grabbed_id = -1;
-			}
-		}
-	}
-};
 MouseState mouse;
 
 FadeColor menubar_color(40, 40, 40);
@@ -117,7 +67,7 @@ void NewTaskOK(bool);
 void SetupEditTaskPanel();
 void EditTaskOK(bool);
 
-bool UpdateTasks();
+bool UpdateTasks(bool do_write = true);
 
 void WriteLine(std::ofstream&, std::string);
 
@@ -131,6 +81,21 @@ float BellValue(float, int);
 
 int main(int argc, char** argv)
 {
+	RECT desktop;
+	const HWND hDesktop = GetDesktopWindow();
+	GetWindowRect(hDesktop, &desktop);
+
+	sf::VideoMode desktopMode = sf::VideoMode::getDesktopMode();
+
+	cout << "sfml says:    " << desktopMode.width << " x " << desktopMode.height << endl;
+	cout << "windows says: " << desktop.right << " x " << desktop.bottom << endl;
+	winscale = sf::Vector2f(desktopMode.width / (float)desktop.right, desktopMode.height / (float)desktop.bottom);
+	cout << "scaling says: " << winscale.x << " x " << winscale.y << endl;
+
+	Task::winscale = winscale;
+	mouse.winscale = winscale;
+
+
 	Mnemosyne::Init();
 
 	Task::InitializeColorMap();
@@ -151,9 +116,29 @@ int main(int argc, char** argv)
 	context.majorVersion = 3;
 	context.minorVersion = 2;
 
-	sf::RenderWindow window(sf::VideoMode(640, 480), "TODO", sf::Style::Default, context);
+	sf::RenderWindow window(sf::VideoMode(640 * winscale.x, 480 * winscale.y), "Litodo", sf::Style::Default, context);
 	window.setVerticalSyncEnabled(true);
-	sf::View view(sf::FloatRect(0, 0, window.getSize().x, window.getSize().y));
+
+	sf::WindowHandle hwin = window.getSystemHandle();
+
+	BOOL USE_DARK_MODE = true;
+	BOOL SET_IMMERSIVE_DARK_MODE_SUCCESS = SUCCEEDED(DwmSetWindowAttribute(hwin, 20, &USE_DARK_MODE, sizeof(USE_DARK_MODE)));
+	//window.setSize(sf::Vector2u(640 * winscale.x, 481 * winscale.y));
+	//window.setSize(sf::Vector2u(640 * winscale.x, 480 * winscale.y));
+	window.setVisible(false);
+	window.setVisible(true);
+	sf::Vector2f winmeasure(window.getSize().x / winscale.x, window.getSize().y / winscale.y);
+	
+	sf::Image litodo_icon;
+	if (litodo_icon.loadFromFile("assets/texture/icon2.png"))
+	{
+		window.setIcon(litodo_icon.getSize().x, litodo_icon.getSize().y, litodo_icon.getPixelsPtr());
+	}
+	//SetWindowPos(hwin, NULL, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_DRAWFRAME);
+
+
+	//sf::View view(sf::FloatRect(0, 0, winmeasure.x, winmeasure.y));
+	sf::View view(sf::FloatRect(0, 0, 640, 480));
 	window.setView(view);
 
 	tgui::GuiSFML maingui{ window };
@@ -161,7 +146,9 @@ int main(int argc, char** argv)
 
 	gui = &maingui;
 
-	winsize = window.getSize().x;
+	float viewwidth = window.getView().getSize().x;
+	float viewheight = window.getView().getSize().y;
+	winsize = window.getSize().x / winscale.x;
 
 	Task::Status shown_status = Task::Status::Open;
 
@@ -185,6 +172,8 @@ int main(int argc, char** argv)
 	while (window.isOpen())
 	{
 		int menubar_height = 32;
+		winmeasure = sf::Vector2f(window.getSize().x / winscale.x, window.getSize().y / winscale.y);
+
 
 		float tasklistHeight = 0.f;
 		for (int i = 0; i < tasks.size(); ++i)
@@ -195,18 +184,19 @@ int main(int argc, char** argv)
 			tasklistHeight += tasks[i].Height();
 		}
 
-		if (tasklistHeight > (window.getSize().y - menubar_height))
+		if (tasklistHeight > (winmeasure.y - menubar_height))
 		{
 			showscroll = true;
 		}
 		else
 		{
 			showscroll = false;
-			tasklistHeight = window.getSize().y - menubar_height;
+			tasklistHeight = winmeasure.y - menubar_height;
 		}
 
 
 		mouse.Update(sf::Mouse::getPosition(window), &window);
+
 
 		sf::Event event;
 		while (window.pollEvent(event))
@@ -222,9 +212,12 @@ int main(int argc, char** argv)
 				}
 				case sf::Event::Resized:
 				{
-					sf::View view(sf::FloatRect(0, 0, window.getSize().x, window.getSize().y));
+					sf::View view(sf::FloatRect(0, 0, window.getSize().x / winscale.x, window.getSize().y / winscale.y));
 					window.setView(view);
-					winsize = window.getSize().x;
+					winsize = window.getSize().x / winscale.x;
+
+					winmeasure = sf::Vector2f(window.getSize().x / winscale.x, window.getSize().y / winscale.y);
+
 					break;
 				}
 				case sf::Event::KeyReleased:
@@ -263,22 +256,23 @@ int main(int argc, char** argv)
 					float delta = event.mouseWheelScroll.delta * scroll_speed;
 					
 					scroll_actual -= delta;
-					if (scroll_actual < 0 || scroll_actual > tasklistHeight - window.getSize().y + menubar_height) scroll_render -= delta;
+					if (scroll_actual < 0 || scroll_actual > tasklistHeight - winmeasure.y + menubar_height) scroll_render -= delta;
 				}
 			}
 		}
+
 
 		if (scroll_actual < 0)
 		{
 			scroll_actual = 0;
 		}
-		else if (scroll_actual > tasklistHeight - window.getSize().y + menubar_height)
+		else if (scroll_actual > tasklistHeight - winmeasure.y + menubar_height)
 		{
-			scroll_actual = tasklistHeight - window.getSize().y + menubar_height;
+			scroll_actual = tasklistHeight - winmeasure.y + menubar_height;
 		}
 
 		scroll_divide = 2.f;
-		if (scroll_render < 0 || scroll_render > tasklistHeight - window.getSize().y + menubar_height) scroll_divide = 3.f;
+		if (scroll_render < 0 || scroll_render > tasklistHeight - winmeasure.y + menubar_height) scroll_divide = 3.f;
 
 
 		if (winstate == WindowState::TaskList)
@@ -310,7 +304,7 @@ int main(int argc, char** argv)
 		}
 		
 
-		Point tsize(window.getSize().x, 0);
+		Point tsize(winmeasure.x, 0);
 
 		if (taskx_anchor != taskx_target)
 		{
@@ -333,7 +327,11 @@ int main(int argc, char** argv)
 		{
 			taskx = taskx_anchor * winsize;
 
-			if (shown_status != Task::Status::None && tasks[i].status != shown_status) continue;
+			if (shown_status != Task::Status::None && tasks[i].status != shown_status)
+			{
+				tasks[i].tagdisplay = 0.f;
+				continue;
+			}
 
 			if (!ui_focus)
 			{
@@ -460,15 +458,15 @@ int main(int argc, char** argv)
 			}
 
 			tasks[i].Update();
-			tasks[i].ListRender(&window, taskx, tasky, tsize.x - scrollbar_width);
+			tasks[i].ListRender(&window, taskx, tasky, tsize.x - scrollbar_width, &mouse);
 			
 			if (tasks[i].is_expanding)
 			{
-				std::cout << "i need to scroll by " << ((tasky + tasks[i].Height()) - window.getSize().y) << std::endl;
-				if (tasky + tasks[i].Height() > window.getSize().y)
+				//std::cout << "i need to scroll by " << ((tasky + tasks[i].Height()) - window.getSize().y) << std::endl;
+				if (tasky + tasks[i].Height() > winmeasure.y)
 				{
 					//std::cout << "i need to scroll by " << ((tasky + tasks[i].Height()) - window.getSize().y) << std::endl;
-					scroll_actual = ((tasky + tasks[i].Height()) - window.getSize().y) + scroll_render - 1;
+					scroll_actual = ((tasky + tasks[i].Height()) - winmeasure.y) + scroll_render - 1;
 				}
 			}
 
@@ -477,15 +475,62 @@ int main(int argc, char** argv)
 
 			if (tasks[i].has_expanded)
 			{
-				std::cout << "i missed by " << ((tasky + tasks[i].Height()) - window.getSize().y) << std::endl;
+				std::cout << "i missed by " << ((tasky + tasks[i].Height()) - winmeasure.y) << std::endl;
 
-				std::cout << "delta: " << (line_cutoff - window.getSize().y + scroll_render) << " / " << scroll_actual << std::endl;
+				std::cout << "delta: " << (line_cutoff - winmeasure.y + scroll_render) << " / " << scroll_actual << std::endl;
 				// FIX THIS, IT'S WRONG
 			}
 #endif
 
 			tasky += tasks[i].Height();
 		}
+
+		for (int i = 0; i < tasks.size(); ++i)
+		{
+			if (tasks[i].tagdisplay > 0.f && tasks[i].tags.size() > 0)
+			{
+				int ex_spacing = 2;
+
+				sf::Text tagtext;
+				float tagFontSize = 15;
+				tagtext.setFont(Mnemosyne::GetFont("exo2"));
+				tagtext.setCharacterSize(tagFontSize);
+
+				int widest = 0;
+
+				for (int j = 0; j < tasks[i].tags.size(); ++j)
+				{
+					tagtext.setString(tasks[i].tags[j]);
+					if (tagtext.getGlobalBounds().width > widest) widest = tagtext.getGlobalBounds().width;
+				}
+				float headspace = TextInfo::StandardTextHeadspace(tagtext);
+
+				sf::RectangleShape tagDispRekt(sf::Vector2f(widest + 16, (tasks[i].tags.size() * (tagFontSize + ex_spacing)) + headspace + ex_spacing));
+				float tdx = tasks[i].tagdisplay_x;
+				float tdy = tasks[i].tagdisplay_y - (tagDispRekt.getSize().y / 2);
+
+				if (tdx > ((window.getSize().x / winscale.x) - tagDispRekt.getSize().x - scrollbar_width - 1)) tdx = (window.getSize().x / winscale.x) - tagDispRekt.getSize().x - scrollbar_width - 1;
+				if (tdy < menubar_height + 1) tdy = menubar_height + 1;
+				if (tdy + tagDispRekt.getSize().y > (window.getSize().y / winscale.y) - 1) tdy = (window.getSize().y / winscale.y) - tagDispRekt.getSize().y - 1;
+
+				tagDispRekt.setPosition(tdx, tdy);
+				tagDispRekt.setFillColor(sf::Color(24, 24, 24, tasks[i].tagdisplay * 255));
+				tagDispRekt.setOutlineColor(sf::Color(255, 150, 0, tasks[i].tagdisplay * 255));
+				tagDispRekt.setOutlineThickness(1.f);
+
+				window.draw(tagDispRekt);
+
+
+				for (int j = 0; j < tasks[i].tags.size(); ++j)
+				{
+					tagtext.setString(tasks[i].tags[j]);
+					tagtext.setPosition(tdx + 8, tdy + (tagFontSize * j) + (ex_spacing * (j + 1)));
+					tagtext.setFillColor(sf::Color(255, 222, 180, tasks[i].tagdisplay * 255));
+					window.draw(tagtext);
+				}
+			}
+		}
+
 
 		if (showscroll || scrollbar_width > 0)
 		{
@@ -505,14 +550,14 @@ int main(int argc, char** argv)
 
 			sf::RectangleShape scrollrekt(sf::Vector2f(scrollbar_width, window.getSize().y - menubar_height));
 
-			scrollrekt.setPosition(window.getSize().x - scrollbar_width, menubar_height);
+			scrollrekt.setPosition(taskx + winmeasure.x - scrollbar_width, menubar_height);
 			scrollrekt.setFillColor(sf::Color(12, 12, 12));
 			scrollrekt.setOutlineColor(sf::Color(255, 255, 255));
 			scrollrekt.setOutlineThickness(1.f);
 			window.draw(scrollrekt);
 
 
-			float viewportHeight = window.getSize().y - menubar_height;
+			float viewportHeight = winmeasure.y - menubar_height;
 			float sb_scale = viewportHeight / tasklistHeight;
 
 			float sb_y = sb_scale * scroll_render;
@@ -554,14 +599,14 @@ int main(int argc, char** argv)
 
 					scroll_actual = 0;
 				}
-				else if (scroll_actual > tasklistHeight - window.getSize().y + menubar_height)
+				else if (scroll_actual > tasklistHeight - winmeasure.y + menubar_height)
 				{
-					float endscroll = tasklistHeight - window.getSize().y + menubar_height;
+					float endscroll = tasklistHeight - winmeasure.y + menubar_height;
 					float temp = log((abs(scroll_actual - endscroll) + 100) * .01f);
 					scroll_render = (temp > 0 ? (temp * 100) + endscroll : scroll_actual);
 					sb_y = sb_scale * scroll_render;
 
-					scroll_actual = tasklistHeight - window.getSize().y + menubar_height;
+					scroll_actual = tasklistHeight - winmeasure.y + menubar_height;
 				}
 
 
@@ -576,7 +621,7 @@ int main(int argc, char** argv)
 			}
 
 			scrollrekt = sf::RectangleShape(sf::Vector2f(12, sb_h));
-			scrollrekt.setPosition(window.getSize().x - scrollbar_width, menubar_height + sb_y);
+			scrollrekt.setPosition(taskx + winmeasure.x - scrollbar_width, menubar_height + sb_y);
 			scrollrekt.setFillColor(scrollbar_color.Color());
 			scrollrekt.setOutlineColor(sf::Color(255, 255, 255));
 			scrollrekt.setOutlineThickness(1.f);
@@ -592,7 +637,7 @@ int main(int argc, char** argv)
 			float wx = taskx + winsize;
 			float wy = menubar_height;
 			float ww = winsize;
-			float wh = window.getSize().y - menubar_height;
+			float wh = winmeasure.y - menubar_height;
 
 			if (taskx_anchor != taskx_target)
 			{
@@ -614,7 +659,7 @@ int main(int argc, char** argv)
 			window.draw(bgrekt);
 
 
-			maingui.get<tgui::Widget>("anchor")->setPosition(wx, wy);
+			maingui.get<tgui::Widget>("anchor")->setPosition(wx * winscale.x, wy * winscale.y);
 		}
 
 
@@ -725,10 +770,10 @@ int main(int argc, char** argv)
 
 		sf::View v = window.getView();
 
-		float vx = fbx / window.getSize().x;
-		float vy = fby / window.getSize().y;
-		float vw = fbw / window.getSize().x;
-		float vh = filterbox_height / window.getSize().y;
+		float vx = fbx / winmeasure.x;
+		float vy = fby / winmeasure.y;
+		float vw = fbw / winmeasure.x;
+		float vh = filterbox_height / winmeasure.y;
 
 		sf::View filterview(sf::FloatRect(fbx, fby, fbw, filterbox_height));
 		filterview.setViewport(sf::FloatRect(vx, vy, vw, vh));
@@ -920,13 +965,14 @@ void SetupNewTaskPanel()
 
 	auto label = tgui::Label::create();
 	label->setText("Task Name");
-	label->setPosition("anchor.left + 24", "anchor.top + 30");
+	label->setPosition(("anchor.left + " + std::to_string(24 * winscale.x)).c_str(), ("anchor.top + " + std::to_string(30 * winscale.y)).c_str());
 	label->setRenderer(blackTheme.getRenderer("Label"));
+	label->setTextSize(13 * winscale.y);
 	gui->add(label, "new_task_name_label");
 
 	auto editbox = tgui::EditBox::create();
-	editbox->setSize("35%", 40);
-	editbox->setPosition("anchor.left + 24", "anchor.top + 50");
+	editbox->setSize("35%", 40 * winscale.y);
+	editbox->setPosition(("anchor.left + " + std::to_string(24 * winscale.x)).c_str(), ("anchor.top + " + std::to_string(50 * winscale.y)).c_str());
 	editbox->setText("");
 	editbox->setDefaultText("Task Name");
 	editbox->setTextSize(0);
@@ -936,13 +982,14 @@ void SetupNewTaskPanel()
 
 	label = tgui::Label::create();
 	label->setText("Priority");
-	label->setPosition("anchor.left + 24", "anchor.top + 104");
+	label->setPosition(("anchor.left + " + std::to_string(24 * winscale.x)).c_str(), ("anchor.top + " + std::to_string(104 * winscale.y)).c_str());
 	label->setRenderer(blackTheme.getRenderer("Label"));
+	label->setTextSize(13 * winscale.y);
 	gui->add(label, "new_task_priority_label");
 
 	auto combobox = tgui::ComboBox::create();
-	combobox->setSize("20%", 28);
-	combobox->setPosition("anchor.left + 24", "anchor.top + 124");
+	combobox->setSize("20%", 28 * winscale.y);
+	combobox->setPosition(("anchor.left + " + std::to_string(24 * winscale.x)).c_str(), ("anchor.top + " + std::to_string(124 * winscale.y)).c_str());
 	combobox->setChangeItemOnScroll(true);
 	combobox->addItem("Critical");
 	combobox->addItem("Important");
@@ -957,13 +1004,14 @@ void SetupNewTaskPanel()
 
 	label = tgui::Label::create();
 	label->setText("Client");
-	label->setPosition("anchor.left + 24", "anchor.top + 166");
+	label->setPosition(("anchor.left + " + std::to_string(24 * winscale.x)).c_str(), ("anchor.top + " + std::to_string(166 * winscale.y)).c_str());
 	label->setRenderer(blackTheme.getRenderer("Label"));
+	label->setTextSize(13 * winscale.y);
 	gui->add(label, "new_task_client_label");
 
 	editbox = tgui::EditBox::create();
-	editbox->setSize("35%", 32);
-	editbox->setPosition("anchor.left + 24", "anchor.top + 186");
+	editbox->setSize("35%", 32 * winscale.y);
+	editbox->setPosition(("anchor.left + " + std::to_string(24 * winscale.x)).c_str(), ("anchor.top + " + std::to_string(186 * winscale.y)).c_str());
 	editbox->setText("");
 	editbox->setDefaultText("Client Name");
 	editbox->setTextSize(0);
@@ -973,13 +1021,14 @@ void SetupNewTaskPanel()
 
 	label = tgui::Label::create();
 	label->setText("Date Opened");
-	label->setPosition("anchor.left + 24", "anchor.top + 232");
+	label->setPosition(("anchor.left + " + std::to_string(24 * winscale.x)).c_str(), ("anchor.top + " + std::to_string(232 * winscale.y)).c_str());
 	label->setRenderer(blackTheme.getRenderer("Label"));
+	label->setTextSize(13 * winscale.y);
 	gui->add(label, "new_task_date_label");
 
 	editbox = tgui::EditBox::create();
-	editbox->setSize("35%", 32);
-	editbox->setPosition("anchor.left + 24", "anchor.top + 252");
+	editbox->setSize("35%", 32 * winscale.y);
+	editbox->setPosition(("anchor.left + " + std::to_string(24 * winscale.x)).c_str(), ("anchor.top + " + std::to_string(252 * winscale.y)).c_str());
 	editbox->setText(splitsexy(datestr(task_sel.date_created), " ")[0]);
 	editbox->setDefaultText("Date Opened");
 	editbox->setTextSize(0);
@@ -987,38 +1036,59 @@ void SetupNewTaskPanel()
 	gui->add(editbox, "new_task_date_editbox");
 
 
+	label = tgui::Label::create();
+	label->setText("Tags");
+	label->setPosition(("anchor.left + " + std::to_string(24 * winscale.x)).c_str(), ("anchor.top + " + std::to_string(298 * winscale.y)).c_str());
+	label->setRenderer(blackTheme.getRenderer("Label"));
+	label->setTextSize(13 * winscale.y);
+	gui->add(label, "new_task_tag_label");
+
+	editbox = tgui::EditBox::create();
+	editbox->setSize("35%", 32 * winscale.y);
+	editbox->setPosition(("anchor.left + " + std::to_string(24 * winscale.x)).c_str(), ("anchor.top + " + std::to_string(318 * winscale.y)).c_str());
+	editbox->setText("");
+	editbox->setDefaultText("Tags");
+	editbox->setTextSize(0);
+	editbox->setRenderer(blackTheme.getRenderer("EditBox"));
+	gui->add(editbox, "new_task_tag_editbox");
+
+
 
 	label = tgui::Label::create();
 	label->setText("Description");
 	label->setPosition("new_task_name_editbox.right + 5%", "new_task_name_label.top");
 	label->setRenderer(blackTheme.getRenderer("Label"));
+	label->setTextSize(13 * winscale.y);
 	gui->add(label, "new_task_description_label");
 
 	auto textarea = tgui::TextArea::create();
 	textarea->setRenderer(blackTheme.getRenderer("TextArea"));
 	//textarea->setSize("95% - new_task_name_editbox.width - 48", "new_task_ok_button.top - new_task_name_editbox.top - 24");
 	textarea->setPosition("new_task_name_editbox.right + 5%", "new_task_name_editbox.top");
+	textarea->setTextSize(16 * winscale.y);
 	gui->add(textarea, "new_task_description_textarea");
 
 
 	tgui::Button::Ptr button = tgui::Button::create();
-	button->setSize(100, 32);
-	button->setPosition("anchor.left + 24", "100% - 56");
+	button->setSize(100 * winscale.x, 32 * winscale.y);
+	button->setPosition(("anchor.left + " + std::to_string(24 * winscale.x)).c_str(), ("100% - " + std::to_string(56 * winscale.y)).c_str());
 	button->setText("OK");
 	button->setRenderer(blackTheme.getRenderer("Button"));
 	button->onPress(NewTaskOK, true);
+	button->setTextSize(0);
 	gui->add(button, "new_task_ok_button");
 
 	button = tgui::Button::create();
-	button->setSize(100, 32);
-	button->setPosition("new_task_ok_button.right + 12", "new_task_ok_button.top");
+	button->setSize(100 * winscale.x, 32 * winscale.y);
+	button->setPosition(("new_task_ok_button.right + " + std::to_string(12 * winscale.x)).c_str(), "new_task_ok_button.top");
 	button->setText("Cancel");
 	button->setRenderer(blackTheme.getRenderer("Button"));
 	button->onPress(NewTaskOK, false);
+	button->setTextSize(0);
 	gui->add(button, "new_task_cancel_button");
 
 
-	gui->get<tgui::Widget>("new_task_description_textarea")->setSize("95% - new_task_name_editbox.width - 48", "new_task_ok_button.top - new_task_name_editbox.top - 24");
+	gui->get<tgui::Widget>("new_task_description_textarea")->setSize(("95% - new_task_name_editbox.width - " + std::to_string(48 * winscale.x)).c_str(), ("new_task_ok_button.top - new_task_name_editbox.top - " + std::to_string(24 * winscale.y)).c_str());
 }
 
 void NewTaskOK(bool ok)
@@ -1042,6 +1112,9 @@ void NewTaskOK(bool ok)
 
 		task_sel.SetStatus(Task::Status::Open);
 		task_sel.StatusUpdate();
+
+		task_sel.SetTags(gui->get<tgui::EditBox>("new_task_tag_editbox")->getText().toStdString());
+
 		AddTask(task_sel);
 	}
 
@@ -1058,13 +1131,14 @@ void SetupEditTaskPanel()
 
 	auto label = tgui::Label::create();
 	label->setText("Task Name");
-	label->setPosition("anchor.left + 24", "anchor.top + 30");
+	label->setPosition(("anchor.left + " + std::to_string(24 * winscale.x)).c_str(), ("anchor.top + " + std::to_string(30 * winscale.y)).c_str());
 	label->setRenderer(blackTheme.getRenderer("Label"));
+	label->setTextSize(13 * winscale.y);
 	gui->add(label, "edit_task_name_label");
 
 	auto editbox = tgui::EditBox::create();
-	editbox->setSize("35%", 40);
-	editbox->setPosition("anchor.left + 24", "anchor.top + 50");
+	editbox->setSize("35%", 40 * winscale.y);
+	editbox->setPosition(("anchor.left + " + std::to_string(24 * winscale.x)).c_str(), ("anchor.top + " + std::to_string(50 * winscale.y)).c_str());
 	editbox->setText(task_sel.GetName());
 	editbox->setDefaultText("Task Name");
 	editbox->setTextSize(0);
@@ -1074,13 +1148,14 @@ void SetupEditTaskPanel()
 
 	label = tgui::Label::create();
 	label->setText("Priority");
-	label->setPosition("anchor.left + 24", "anchor.top + 104");
+	label->setPosition(("anchor.left + " + std::to_string(24 * winscale.x)).c_str(), ("anchor.top + " + std::to_string(104 * winscale.y)).c_str());
 	label->setRenderer(blackTheme.getRenderer("Label"));
+	label->setTextSize(13 * winscale.y);
 	gui->add(label, "edit_task_priority_label");
 
 	auto combobox = tgui::ComboBox::create();
-	combobox->setSize("20%", 28);
-	combobox->setPosition("anchor.left + 24", "anchor.top + 124");
+	combobox->setSize("20%", 28 * winscale.y);
+	combobox->setPosition(("anchor.left + " + std::to_string(24 * winscale.x)).c_str(), ("anchor.top + " + std::to_string(124 * winscale.y)).c_str());
 	combobox->setChangeItemOnScroll(true);
 	combobox->addItem("Critical");
 	combobox->addItem("Important");
@@ -1095,13 +1170,14 @@ void SetupEditTaskPanel()
 
 	label = tgui::Label::create();
 	label->setText("Client");
-	label->setPosition("anchor.left + 24", "anchor.top + 166");
+	label->setPosition(("anchor.left + " + std::to_string(24 * winscale.x)).c_str(), ("anchor.top + " + std::to_string(166 * winscale.y)).c_str());
 	label->setRenderer(blackTheme.getRenderer("Label"));
+	label->setTextSize(13 * winscale.y);
 	gui->add(label, "edit_task_client_label");
 
 	editbox = tgui::EditBox::create();
-	editbox->setSize("35%", 32);
-	editbox->setPosition("anchor.left + 24", "anchor.top + 186");
+	editbox->setSize("35%", 32 * winscale.y);
+	editbox->setPosition(("anchor.left + " + std::to_string(24 * winscale.x)).c_str(), ("anchor.top + " + std::to_string(186 * winscale.y)).c_str());
 	editbox->setText(task_sel.GetClient());
 	editbox->setDefaultText("Client Name");
 	editbox->setTextSize(0);
@@ -1111,13 +1187,14 @@ void SetupEditTaskPanel()
 
 	label = tgui::Label::create();
 	label->setText("Date Opened");
-	label->setPosition("anchor.left + 24", "anchor.top + 232");
+	label->setPosition(("anchor.left + " + std::to_string(24 * winscale.x)).c_str(), ("anchor.top + " + std::to_string(232 * winscale.y)).c_str());
 	label->setRenderer(blackTheme.getRenderer("Label"));
+	label->setTextSize(13 * winscale.y);
 	gui->add(label, "edit_task_date_label");
 
 	editbox = tgui::EditBox::create();
-	editbox->setSize("35%", 32);
-	editbox->setPosition("anchor.left + 24", "anchor.top + 252");
+	editbox->setSize("35%", 32 * winscale.y);
+	editbox->setPosition(("anchor.left + " + std::to_string(24 * winscale.x)).c_str(), ("anchor.top + " + std::to_string(252 * winscale.y)).c_str());
 	editbox->setText(splitsexy(datestr(task_sel.date_created), " ")[0]);
 	editbox->setDefaultText("Date Opened");
 	editbox->setTextSize(0);
@@ -1127,11 +1204,35 @@ void SetupEditTaskPanel()
 	gui->add(editbox, "edit_task_date_editbox");
 
 
+	label = tgui::Label::create();
+	label->setText("Tags");
+	label->setPosition(("anchor.left + " + std::to_string(24 * winscale.x)).c_str(), ("anchor.top + " + std::to_string(298 * winscale.y)).c_str());
+	label->setRenderer(blackTheme.getRenderer("Label"));
+	label->setTextSize(13 * winscale.y);
+	gui->add(label, "edit_task_tag_label");
+
+	editbox = tgui::EditBox::create();
+	editbox->setSize("35%", 32 * winscale.y);
+	editbox->setPosition(("anchor.left + " + std::to_string(24 * winscale.x)).c_str(), ("anchor.top + " + std::to_string(318 * winscale.y)).c_str());
+	std::string taglist;
+	for (int i = 0; i < task_sel.tags.size(); ++i)
+	{
+		if (i > 0) taglist += ", ";
+		taglist += task_sel.tags[i];
+	}
+	editbox->setText(taglist);
+	editbox->setDefaultText("Tags");
+	editbox->setTextSize(0);
+	editbox->setRenderer(blackTheme.getRenderer("EditBox"));
+	gui->add(editbox, "edit_task_tag_editbox");
+
+
 
 	label = tgui::Label::create();
 	label->setText("Description");
 	label->setPosition("edit_task_name_editbox.right + 5%", "edit_task_name_label.top");
 	label->setRenderer(blackTheme.getRenderer("Label"));
+	label->setTextSize(13 * winscale.y);
 	gui->add(label, "edit_task_description_label");
 
 	auto textarea = tgui::TextArea::create();
@@ -1139,27 +1240,30 @@ void SetupEditTaskPanel()
 	//textarea->setSize("95% - edit_task_name_editbox.width - 48", "edit_task_ok_button.top - edit_task_name_editbox.top - 24");
 	textarea->setPosition("edit_task_name_editbox.right + 5%", "edit_task_name_editbox.top");
 	textarea->setText(task_sel.GetDescription());
+	textarea->setTextSize(16 * winscale.y);
 	gui->add(textarea, "edit_task_description_textarea");
 
 
 	tgui::Button::Ptr button = tgui::Button::create();
-	button->setSize(100, 32);
-	button->setPosition("anchor.left + 24", "100% - 56");
+	button->setSize(100 * winscale.x, 32 * winscale.y);
+	button->setPosition(("anchor.left + " + std::to_string(24 * winscale.x)).c_str(), ("100% - " + std::to_string(56 * winscale.y)).c_str());
 	button->setText("OK");
 	button->setRenderer(blackTheme.getRenderer("Button"));
 	button->onPress(EditTaskOK, true);
+	button->setTextSize(0);
 	gui->add(button, "edit_task_ok_button");
 
 	button = tgui::Button::create();
-	button->setSize(100, 32);
-	button->setPosition("edit_task_ok_button.right + 12", "edit_task_ok_button.top");
+	button->setSize(100 * winscale.x, 32 * winscale.y);
+	button->setPosition(("edit_task_ok_button.right + " + std::to_string(12 * winscale.x)).c_str(), "edit_task_ok_button.top");
 	button->setText("Cancel");
 	button->setRenderer(blackTheme.getRenderer("Button"));
 	button->onPress(EditTaskOK, false);
+	button->setTextSize(0);
 	gui->add(button, "edit_task_cancel_button");
 
 
-	gui->get<tgui::Widget>("edit_task_description_textarea")->setSize("95% - edit_task_name_editbox.width - 48", "edit_task_ok_button.top - edit_task_name_editbox.top - 24");
+	gui->get<tgui::Widget>("edit_task_description_textarea")->setSize(("95% - edit_task_name_editbox.width - " + std::to_string(48 * winscale.x)).c_str(), ("edit_task_ok_button.top - edit_task_name_editbox.top - " + std::to_string(24 * winscale.y)).c_str());
 }
 
 void EditTaskOK(bool ok)
@@ -1181,8 +1285,10 @@ void EditTaskOK(bool ok)
 		task_sel.SetClient(gui->get<tgui::EditBox>("edit_task_client_editbox")->getText().toStdString());
 		task_sel.SetDescription(gui->get<tgui::TextArea>("edit_task_description_textarea")->getText().toStdString());
 
-		task_sel.SetStatus(Task::Status::Open);
+		//task_sel.SetStatus(Task::Status::Open);
 		task_sel.StatusUpdate();
+
+		task_sel.SetTags(gui->get<tgui::EditBox>("edit_task_tag_editbox")->getText().toStdString());
 		
 		for (int i = 0; i < tasks.size(); ++i)
 		{
@@ -1201,26 +1307,49 @@ void EditTaskOK(bool ok)
 }
 
 
-bool UpdateTasks()
+bool UpdateTasks(bool do_write)
 {
-	cout << "Writing data..." << flush;
-
-	std::ofstream fileout("tasks");
-	if (!fileout.is_open())
+	for (std::string str : ttags)
 	{
-		cout << "failed" << endl;
-		cout << "Error opening file for writing" << endl;
-		return false;
+		cout << str << endl;
 	}
 
+	ttags.clear();
 	for (int i = 0; i < tasks.size(); ++i)
 	{
-		if (i > 0) WriteLine(fileout, ",\n");
-		WriteLine(fileout, tasks[i].Serialize());
+		ttags.add(tasks[i].tags);
 	}
 
-	fileout.close();
-	cout << "done" << endl;
+	cout << "[ TAGS ]" << endl;
+	for (int i = 0; i < ttags.size(); ++i)
+	{
+		if (i > 0) cout << ", ";
+		cout << ttags[i];
+	}
+	cout << endl;
+
+
+	if (do_write)
+	{
+		cout << "Writing data..." << flush;
+
+		std::ofstream fileout("tasks");
+		if (!fileout.is_open())
+		{
+			cout << "failed" << endl;
+			cout << "Error opening file for writing" << endl;
+			return false;
+		}
+
+		for (int i = 0; i < tasks.size(); ++i)
+		{
+			if (i > 0) WriteLine(fileout, ",\n");
+			WriteLine(fileout, tasks[i].Serialize());
+		}
+
+		fileout.close();
+		cout << "done" << endl;
+	}
 	return true;
 }
 
@@ -1294,6 +1423,7 @@ bool ReadTasks()
 
 		AddTask(Task::Create(vars), false);
 	}
+	UpdateTasks(false);
 
 	return true;
 }

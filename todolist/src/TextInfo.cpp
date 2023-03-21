@@ -82,3 +82,39 @@ std::vector<std::string> TextInfo::StringToLines(std::string str, std::string fo
 
 	return strlines;
 }
+
+
+float TextInfo::TextHeight(sf::Text text)
+{
+	return text.getGlobalBounds().height;
+}
+
+float TextInfo::TextHeadspace(sf::Text text)
+{
+	return text.getGlobalBounds().top - text.getPosition().y;
+}
+
+float TextInfo::TextTop(sf::Text text)
+{
+	return text.getGlobalBounds().top;
+}
+
+
+float TextInfo::StandardTextHeight(sf::Text text)
+{
+	text.setString("ABCDEFGHIJKLMNOP RSTUVWXYZ0123456789");
+	return text.getGlobalBounds().height;
+}
+
+float TextInfo::StandardTextHeadspace(sf::Text text)
+{
+	text.setString("ABCDEFGHIJKLMNOP RSTUVWXYZ0123456789");
+	return text.getGlobalBounds().top - text.getPosition().y;
+}
+
+float TextInfo::StandardTextTop(sf::Text text)
+{
+	text.setString("ABCDEFGHIJKLMNOP RSTUVWXYZ0123456789");
+	return text.getGlobalBounds().top;
+}
+

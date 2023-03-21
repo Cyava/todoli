@@ -7,6 +7,9 @@
 #include "Button.hpp"
 #include "FadeColor.hpp"
 #include "Mnemosyne.hpp"
+#include "MouseState.hpp"
+
+#include "wtypes.h"
 
 
 struct Task
@@ -26,6 +29,7 @@ struct Task
 	Status statusTarget;
 
 	std::vector<std::string> notes;
+	unique_vector<std::string> tags;
 
 	std::string client;
 
@@ -53,6 +57,12 @@ struct Task
 
 	static std::map<int, std::map<int, std::vector<int>>> color_map;
 
+	static sf::Vector2f winscale;
+
+	float tagdisplay = 0.f;
+	float tagdisplay_x = 0.f;
+	float tagdisplay_y = 0.f;
+
 
 	Task();
 
@@ -74,10 +84,12 @@ struct Task
 	bool SetName(std::string);
 	bool SetPriority(unsigned int);
 	bool SetStatus(Task::Status);
+	bool SetTags(std::string);
+
 	void SetupButtons();
 	bool StatusUpdate();
 
-	void ListRender(sf::RenderWindow*, float, float, float);
+	void ListRender(sf::RenderWindow*, float, float, float, MouseState*);
 
 	std::string Serialize();
 

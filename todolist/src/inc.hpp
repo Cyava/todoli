@@ -62,6 +62,14 @@ public:
 		}
 	}
 
+	void add(unique_vector<T>& list)
+	{
+		for (T val : list)
+		{
+			push_back(val);
+		}
+	}
+
 	size_t find(const T& val)
 	{
 		for (size_t i = 0; i < elements.size(); i++)

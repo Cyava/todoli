@@ -3,6 +3,8 @@
 
 std::map<int, std::map<int, std::vector<int>>> Task::color_map;
 
+sf::Vector2f Task::winscale(0, 0);
+
 
 
 Task::Task()
@@ -128,6 +130,16 @@ bool Task::SetStatus(Task::Status _status)
 	return true;
 }
 
+bool Task::SetTags(std::string _tags)
+{
+	std::vector<std::string> newtags = ToList(_tags, ", ");
+	tags.clear();
+	tags.add(newtags);
+
+	return true;
+}
+
+
 void Task::SetupButtons()
 {
 	buttons.buttons.clear();
@@ -179,8 +191,11 @@ bool Task::StatusUpdate()
 }
 
 
-void Task::ListRender(sf::RenderWindow* window, float x, float y, float w)
+void Task::ListRender(sf::RenderWindow* window, float x, float y, float w, MouseState* mouse)
 {
+	sf::Vector2f winmeasure(window->getSize().x / winscale.x, window->getSize().y / winscale.y);
+
+
 	int hoverthicc = 10;
 	float colorbar_w = 4 + (hovertime * hoverthicc);
 
@@ -201,6 +216,40 @@ void Task::ListRender(sf::RenderWindow* window, float x, float y, float w)
 	taskname.setFont(Mnemosyne::GetFont("exo2"));
 	taskname.setCharacterSize(taskname_size);
 	taskname.setString(name);
+	taskname.setPosition(x + nameshift + 4, y + 4);
+
+
+	int taghover_top = TextInfo::TextTop(taskname) - 5;
+	int taghover_bot = taghover_top + TextInfo::StandardTextHeight(taskname) + 9;
+	int taghover_left = x + nameshift;
+	int taghover_right = x + nameshift + 8 + taskname.getGlobalBounds().width;
+	if (mouse->gpos.x >= taghover_left && mouse->gpos.x <= taghover_right && mouse->gpos.y >= taghover_top && mouse->gpos.y <= taghover_bot)
+	{
+		tagdisplay_x = mouse->gpos.x + (12 * winscale.x);
+		if (tagdisplay < 1.f)
+		{
+			tagdisplay += (1.f - tagdisplay) * .12f;
+			if (tagdisplay > .99f) tagdisplay = 1.f;
+		}
+	}
+	else if (tagdisplay > 0.f)
+	{
+		tagdisplay *= .84f;
+		if (tagdisplay < .01f) tagdisplay = 0.f;
+	}
+
+	if (tagdisplay > 0.f)
+	{
+		tagdisplay_y = (taghover_top + taghover_bot) / 2;
+
+		sf::Color taghovercol = sf::Color(255, 255, 255, tagdisplay * 32);
+
+		sf::RectangleShape tagRekt(sf::Vector2f(taghover_right - taghover_left, taghover_bot - taghover_top));
+		tagRekt.setPosition(taghover_left, taghover_top);
+		tagRekt.setFillColor(taghovercol);
+		window->draw(tagRekt);
+	}
+
 
 	taskname.setFillColor(sf::Color(0, 0, 0, 140));
 	taskname.setPosition(x + nameshift + 3, y + 3);
@@ -209,6 +258,34 @@ void Task::ListRender(sf::RenderWindow* window, float x, float y, float w)
 	taskname.setFillColor(sf::Color::White);
 	taskname.setPosition(x + nameshift + 4, y + 4);
 	window->draw(taskname);
+
+#if 0
+	{
+		int d_ty = taskname.getGlobalBounds().top;
+		int d_by = taskname.getGlobalBounds().top + taskname.getGlobalBounds().height;
+
+		if (tagdisplay > 0)
+		{
+			/* THIS CAN GET THE HEIGHT LESS THE "BELOW THE LINE" TAILS ON LETTERS */
+			/* font_size - (text_top - drawn_y) = text_height (without tails) */
+
+			//std::cout << taskname.getCharacterSize() << " (" << TextInfo::TextHeight(taskname) << " + " << (TextInfo::TextTop(taskname) - (y + 4)) << ")" << std::endl;
+			std::cout << taskname.getCharacterSize() << " (" << TextInfo::TextHeight(taskname) << " + " << TextInfo::TextHeadspace(taskname) << ")" << std::endl;
+		}
+
+		sf::RectangleShape debuggy(sf::Vector2f(w, d_ty - (y + 4)));
+		debuggy.setPosition(0, y + 4);
+		debuggy.setFillColor(sf::Color::Green);
+		window->draw(debuggy);
+
+		debuggy = sf::RectangleShape(sf::Vector2f(w, d_by - d_ty));
+		debuggy.setPosition(0, d_ty);
+		debuggy.setFillColor(sf::Color::Transparent);
+		debuggy.setOutlineColor(sf::Color::Magenta);
+		debuggy.setOutlineThickness(2.f);
+		window->draw(debuggy);
+	}
+#endif
 
 
 	std::string dc_str = splitsexy(datestr(date_created), " ")[0];
@@ -242,6 +319,27 @@ void Task::ListRender(sf::RenderWindow* window, float x, float y, float w)
 	window->draw(taskdate);
 
 
+	if (client.length() > 0)
+	{
+		float clientshift = 0.f;
+		if (expansion > 0 && buttons.buttons.size() > 0)
+		{
+			float mshifter = (((buttons.buttons[0].radius * 2) + 6) * buttons.buttons.size()) + 12;
+			clientshift = mshifter * expansion;
+		}
+
+		taskdate.setString("Client: " + client);
+
+		taskdate.setFillColor(sf::Color(0, 0, 0, 140));
+		taskdate.setPosition(x + (nameshift / 2) + w - 21 - clientshift - taskdate.getLocalBounds().width, y + height / 2 + 4);
+		window->draw(taskdate);
+
+		taskdate.setFillColor(sf::Color(150, 150, 150, 222));
+		taskdate.setPosition(x + (nameshift / 2) + w - 20 - clientshift - taskdate.getLocalBounds().width, y + height / 2 + 5);
+		window->draw(taskdate);
+	}
+
+
 	sf::RectangleShape separator(sf::Vector2f(w, 1));
 	//separator.setFillColor(sf::Color(255, 255, 255, 150));
 	separator.setFillColor(sf::Color(0, 0, 0, 180));
@@ -251,7 +349,7 @@ void Task::ListRender(sf::RenderWindow* window, float x, float y, float w)
 
 	for (int i = 0; i < buttons.buttons.size(); ++i)
 	{
-		buttons.buttons[i].SetPosition(sf::Vector2f(x + w - 16 - (((buttons.buttons[i].radius * 2) + 6) * (buttons.buttons.size() - i)), y + (height / 2)));
+		buttons.buttons[i].SetPosition(sf::Vector2f(x + w + 4 - (((buttons.buttons[i].radius * 2) + 6) * (buttons.buttons.size() - i)), y + (height / 2)));
 		buttons.buttons[i].Draw(window);
 	}
 
@@ -260,10 +358,10 @@ void Task::ListRender(sf::RenderWindow* window, float x, float y, float w)
 	{
 		sf::View v = window->getView();
 
-		float vx = x / window->getSize().x;
-		float vy = y / window->getSize().y;
-		float vw = w / window->getSize().x;
-		float vh = Height() / window->getSize().y;
+		float vx = x / winmeasure.x;
+		float vy = y / winmeasure.y;
+		float vw = w / winmeasure.x;
+		float vh = Height() / winmeasure.y;
 		
 		sf::View taskview(sf::FloatRect(x, y, w, Height()));
 		taskview.setViewport(sf::FloatRect(vx, vy, vw, vh));
@@ -437,6 +535,14 @@ std::string Task::Serialize()
 		serstr += "\"" + SanitizeString(notes[i]) + "\"";
 	}
 	serstr += "}";
+	serstr += ", ";
+	serstr += "tags: {";
+	for (int i = 0; i < tags.size(); ++i)
+	{
+		if (i > 0) serstr += ", ";
+		serstr += "\"" + SanitizeString(tags[i]) + "\"";
+	}
+	serstr += "}";
 
 	serstr += "}";
 
@@ -554,7 +660,42 @@ Task Task::Create(std::map<std::string, std::string> vars)
 		}
 	}
 
+	std::vector<std::string> tags = ToList(ExtractSexyBraces(vars["tags"]), ",");
+	if (tags.size() > 0)
+	{
+		std::cout << t.name << std::endl;
+		for (int i = 0; i < tags.size(); ++i)
+		{
+			if (tags[i][0] == '"' && tags[i][tags[i].size() - 1] == '"') tags[i] = tags[i].substr(1, tags[i].size() - 2);
+			tags[i] = UnescapeString(tags[i]);
+			std::cout << "\t[" << i << "] " << tags[i] << std::endl;
+
+			t.tags.push_back(tags[i]);
+		}
+	}
+
 	t.statusTarget = t.status;
+
+
+#if 0
+	/* ### TEMPORARY ### */
+	std::string fixedname = t.name;
+	size_t spos = fixedname.find_first_of('[');
+	size_t epos = fixedname.find_first_of(']', spos);
+	while (spos != std::string::npos && epos != std::string::npos)
+	{
+		std::string taggy = fixedname.substr(spos + 1, epos - spos - 1);
+		std::cout << "Tag found: '" << taggy << "'" << std::endl;
+		t.tags.push_back(taggy);
+		fixedname = fixedname.substr(0, spos) + fixedname.substr(epos + 1);
+
+		spos = fixedname.find_first_of('[');
+		epos = fixedname.find_first_of(']', spos);
+	}
+	Trim(fixedname);
+	t.name = fixedname;
+#endif
+
 
 	return t;
 }
