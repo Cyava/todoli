@@ -31,6 +31,39 @@ void RollingAverage::Add(float n)
 	}
 }
 
+float RollingAverage::AvgOfLastN(int n)
+{
+	if (n >= vars.size()) return Get();
+
+	float lavg = 0.f;
+	int idx;
+
+	for (int i = 1; i <= n; ++i)
+	{
+		idx = (roller + (size - i)) % size;
+		lavg += vars[idx];
+	}
+	lavg /= n;
+
+	return lavg;
+}
+
+void RollingAverage::Clear()
+{
+	Fill(0);
+}
+
+void RollingAverage::Fill(float n)
+{
+	vars.resize(size);
+	for (int i = 0; i < size; ++i)
+	{
+		vars[i] = n;
+	}
+	avg = n;
+	roller = 0;
+}
+
 
 std::vector<std::string> splitsexy(std::string s, std::string delimiter)
 {

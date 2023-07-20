@@ -156,6 +156,10 @@ int main(int argc, char** argv)
 	SortTasks();
 
 
+	RollingAverage rav(32);
+	float pval = 0.f;
+	int last_n = 32;
+
 	float scroll_speed = 16.f;
 	float scroll_render = 0.f;
 	float scroll_actual = 0.f;
@@ -254,6 +258,20 @@ int main(int argc, char** argv)
 				case sf::Event::MouseWheelScrolled:
 				{
 					float delta = event.mouseWheelScroll.delta * scroll_speed;
+
+					if (delta == 0 && rav.AvgOfLastN(last_n) == 0)
+					{
+						rav.Clear();
+					}
+					else if (rav.Get() == 0)
+					{
+						rav.Fill(delta);
+					}
+					else
+					{
+						rav.Add(delta);
+					}
+					delta = rav.Get();
 					
 					scroll_actual -= delta;
 					if (scroll_actual < 0 || scroll_actual > tasklistHeight - winmeasure.y + menubar_height) scroll_render -= delta;

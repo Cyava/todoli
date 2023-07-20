@@ -135,8 +135,15 @@ public:
 	}
 
 	void Add(float);
+	float AvgOfLastN(int);
+
+	void Clear();
+
+	void Fill(float);
 
 	float Get() { return avg; }
+
+	void Print();
 };
 
 
