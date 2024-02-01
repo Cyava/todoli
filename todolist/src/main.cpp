@@ -33,6 +33,7 @@ MouseState mouse;
 FadeColor menubar_color(40, 40, 40);
 FadeColor filterbox_hilite(40, 40, 40);
 FadeColor newtask_hilite(40, 40, 40);
+FadeColor searchbox_hilite(40, 40, 40);
 
 
 bool ui_focus = false;
@@ -43,6 +44,14 @@ float filterbox_speed = .1f;
 float filterbox_width = 160;
 float filterbox_height = 100;
 std::vector<Task::Status> filteroptions{ Task::Status::None, Task::Status::Open, Task::Status::Complete, Task::Status::Canceled };
+
+float searchbox_min_width = 120.f;
+float searchbox_target_width = searchbox_min_width;
+float searchbox_speed = .2f;
+FadeColor searchbox_outline(255, 255, 255);
+float searchbox_width = searchbox_min_width;
+float searchbox_height = filterbox_height;
+std::string searchString = "";
 
 
 int winsize;
@@ -108,6 +117,12 @@ int main(int argc, char** argv)
 	newtask_hilite.mode = FadeColor::Mode::Quadratic;
 	newtask_hilite.speed = .16f;
 
+	searchbox_hilite.mode = FadeColor::Mode::Quadratic;
+	searchbox_hilite.speed = .16f;
+
+	searchbox_outline.mode = FadeColor::Mode::Quadratic;
+	searchbox_outline.speed = .16f;
+
 
 	sf::ContextSettings context;
 	context.depthBits = 24;
@@ -156,9 +171,9 @@ int main(int argc, char** argv)
 	SortTasks();
 
 
-	RollingAverage rav(32);
+	RollingAverage rav(16);
 	float pval = 0.f;
-	int last_n = 32;
+	int last_n = 4;
 
 	float scroll_speed = 16.f;
 	float scroll_render = 0.f;
@@ -175,6 +190,8 @@ int main(int argc, char** argv)
 
 	while (window.isOpen())
 	{
+		bool searching = (searchbox_target_width > searchbox_min_width);
+
 		int menubar_height = 32;
 		winmeasure = sf::Vector2f(window.getSize().x / winscale.x, window.getSize().y / winscale.y);
 
@@ -182,9 +199,67 @@ int main(int argc, char** argv)
 		float tasklistHeight = 0.f;
 		for (int i = 0; i < tasks.size(); ++i)
 		{
+			tasks[i].hidden_by_filter = false;
 			taskx = taskx_anchor * winsize;
 
-			if (shown_status != Task::Status::None && tasks[i].status != shown_status) continue;
+			//if (shown_status != Task::Status::None && tasks[i].status != shown_status) continue;
+
+			if (shown_status != Task::Status::None && tasks[i].status != shown_status)
+			{
+				tasks[i].tagdisplay = 0.f;
+				tasks[i].hidden_by_filter = true;
+				continue;
+			}
+
+			if (searchString.length() > 0)
+			{
+				std::vector<std::string> searchterms = ToList(searchString, ";");
+
+				bool matches = false;
+				//if (Upper(tasks[i].name).find(Upper(searchString)) == std::string::npos) continue;
+				std::string namecomp = Upper(tasks[i].name);
+				for (std::string term : searchterms)
+				{
+					if (term.length() <= 0) continue;
+					std::string sterm = Upper(term);
+
+					if (namecomp.find(sterm) != std::string::npos)
+					{
+						matches = true;
+						break;
+					}
+
+					size_t cidx = sterm.find_first_of(':');
+					if (cidx != std::string::npos)
+					{
+						std::string field = sterm.substr(0, cidx);
+						std::string val = sterm.substr(cidx + 1);
+						if (field == "TAG")
+						{
+							for (std::string tagcomp : tasks[i].tags)
+							{
+								tagcomp = Upper(tagcomp);
+
+								if (val == tagcomp)
+								{
+									matches = true;
+									break;
+								}
+							}
+						}
+					}
+
+					if (matches) break;
+				}
+
+				if (!matches)
+				{
+					tasks[i].tagdisplay = 0.f;
+					tasks[i].hidden_by_filter = true;
+					continue;
+				}
+			}
+
 			tasklistHeight += tasks[i].Height();
 		}
 
@@ -200,6 +275,8 @@ int main(int argc, char** argv)
 
 
 		mouse.Update(sf::Mouse::getPosition(window), &window);
+		float prevscroll = mouse.scrolled_amount;
+		mouse.scrolled_amount = 0.f;
 
 
 		sf::Event event;
@@ -224,6 +301,50 @@ int main(int argc, char** argv)
 
 					break;
 				}
+				case sf::Event::TextEntered:
+				{
+					if (searching)
+					{
+						uint32_t c = event.text.unicode;
+
+						if (c == 8)
+						{
+							if (searchString.length() > 0) searchString = searchString.substr(0, searchString.length() - 1);
+						}
+						else if (c == 10 || c == 13)
+						{
+							//searchString += c;
+						}
+						else if (c == 27)
+						{
+							//searchString += c;
+						}
+						else
+						{
+							searchString += c;
+							//cout << c << endl;
+						}
+					}
+
+					break;
+				}
+				case sf::Event::KeyPressed:
+				{
+					if (event.key.code == sf::Keyboard::Key::F)
+					{
+						if (sf::Keyboard::isKeyPressed(sf::Keyboard::Key::LControl) || sf::Keyboard::isKeyPressed(sf::Keyboard::Key::RControl))
+						{
+							ui_focus = true;
+							searchbox_target_width = winmeasure.x * .4f;
+
+							mouse.grabbed_key = GRAB_KEY_MENUBAR;
+							mouse.grabbed_id = 2;
+							mouse.grabbed_id_sub = -1;
+						}
+					}
+
+					break;
+				}
 				case sf::Event::KeyReleased:
 				{
 					if (event.key.code == sf::Keyboard::Key::F1)
@@ -244,6 +365,19 @@ int main(int argc, char** argv)
 					{
 						ReadTasks();
 					}
+					else if (event.key.code == sf::Keyboard::Key::Escape)
+					{
+						if (searching)
+						{
+							searchString = "";
+							
+							ui_focus = false;
+							searchbox_target_width = searchbox_min_width;
+							searching = false;
+						}
+					}
+
+					break;
 				}
 				case sf::Event::MouseButtonPressed:
 				{
@@ -258,7 +392,9 @@ int main(int argc, char** argv)
 				case sf::Event::MouseWheelScrolled:
 				{
 					float delta = event.mouseWheelScroll.delta * scroll_speed;
+					mouse.scrolled_amount = delta;
 
+#if 0
 					if (delta == 0 && rav.AvgOfLastN(last_n) == 0)
 					{
 						rav.Clear();
@@ -271,13 +407,38 @@ int main(int argc, char** argv)
 					{
 						rav.Add(delta);
 					}
-					delta = rav.Get();
+					//cout << "- - -\n" << "> Delta: " << std::to_string(delta) << "\n> Rav: " << std::to_string(rav.Get()) << endl;
+					//delta = rav.Get();
 					
 					scroll_actual -= delta;
 					if (scroll_actual < 0 || scroll_actual > tasklistHeight - winmeasure.y + menubar_height) scroll_render -= delta;
+#endif
 				}
 			}
 		}
+
+
+#if 1
+		if (mouse.scrolled_amount == 0 && rav.AvgOfLastN(last_n) == 0)
+		{
+			rav.Clear();
+		}
+		else if (rav.Get() == 0)
+		{
+			rav.Fill(mouse.scrolled_amount);
+		}
+		else
+		{
+			rav.Add(mouse.scrolled_amount);
+		}
+		if (rav.Get() != 0)
+		{
+			float delta = rav.Get();// mouse.scrolled_amount;
+
+			scroll_actual -= delta;
+			if (scroll_actual < 0 || scroll_actual > tasklistHeight - winmeasure.y + menubar_height) scroll_render -= delta;
+		}
+#endif
 
 
 		if (scroll_actual < 0)
@@ -350,6 +511,55 @@ int main(int argc, char** argv)
 				tasks[i].tagdisplay = 0.f;
 				continue;
 			}
+
+			if (searchString.length() > 0)
+			{
+				std::vector<std::string> searchterms = ToList(searchString, ";");
+
+				bool matches = false;
+				//if (Upper(tasks[i].name).find(Upper(searchString)) == std::string::npos) continue;
+				std::string namecomp = Upper(tasks[i].name);
+				for (std::string term : searchterms)
+				{
+					if (term.length() <= 0) continue;
+					std::string sterm = Upper(term);
+
+					if (namecomp.find(sterm) != std::string::npos)
+					{
+						matches = true;
+						break;
+					}
+
+					size_t cidx = sterm.find_first_of(':');
+					if (cidx != std::string::npos)
+					{
+						std::string field = sterm.substr(0, cidx);
+						std::string val = sterm.substr(cidx + 1);
+						if (field == "TAG")
+						{
+							for (std::string tagcomp : tasks[i].tags)
+							{
+								tagcomp = Upper(tagcomp);
+
+								if (val == tagcomp)
+								{
+									matches = true;
+									break;
+								}
+							}
+						}
+					}
+
+					if (matches) break;
+				}
+
+				if (!matches)
+				{
+					tasks[i].tagdisplay = 0.f;
+					continue;
+				}
+			}
+
 
 			if (!ui_focus)
 			{
@@ -687,6 +897,8 @@ int main(int argc, char** argv)
 		menubar_color.Update();
 		filterbox_hilite.Update();
 		newtask_hilite.Update();
+		searchbox_hilite.Update();
+		searchbox_outline.Update();
 
 		sf::RectangleShape menubar(sf::Vector2f(tsize.x, menubar_height));
 		menubar.setPosition(0, 0);
@@ -744,7 +956,7 @@ int main(int argc, char** argv)
 			{
 				if (mouse.grabbed_key == GRAB_KEY_MENUBAR && mouse.grabbed_id == 0)
 				{
-					if (!ui_focus && filterbox_target == 0.f)
+					if (filterbox_target == 0.f) // if (!ui_focus && filterbox_target == 0.f)
 					{
 						ui_focus = true;
 						filterbox_target = 1.f;
@@ -804,13 +1016,22 @@ int main(int argc, char** argv)
 
 		sf::Vector2f ftpos(10, 11);
 		sf::VertexArray filtertriangle(sf::Triangles, 3);
-		filtertriangle[0].position = sf::Vector2f(ftpos.x, ftpos.y);
-		filtertriangle[1].position = sf::Vector2f(ftpos.x + 6, ftpos.y + 4);
-		filtertriangle[2].position = sf::Vector2f(ftpos.x, ftpos.y + 8);
+		//filtertriangle[0].position = sf::Vector2f(ftpos.x, ftpos.y);
+		//filtertriangle[1].position = sf::Vector2f(ftpos.x + 6, ftpos.y + 4);
+		//filtertriangle[2].position = sf::Vector2f(ftpos.x, ftpos.y + 8);
+		filtertriangle[0].position = sf::Vector2f(-3, -4);
+		filtertriangle[1].position = sf::Vector2f(3, 0);
+		filtertriangle[2].position = sf::Vector2f(-3, 4);
+
 		filtertriangle[0].color = sf::Color(255, 255, 255);
 		filtertriangle[1].color = sf::Color(255, 255, 255);
 		filtertriangle[2].color = sf::Color(255, 255, 255);
-		window.draw(filtertriangle);
+
+		sf::Transform filtertriangleRotator;
+		filtertriangleRotator.translate(ftpos.x + 3, ftpos.y + 4);
+		filtertriangleRotator.rotate(filterbox_scale * 90.f);
+
+		window.draw(filtertriangle, filtertriangleRotator);
 
 		std::string sname = Task::StatusString(shown_status);
 		if (sname == "None")
@@ -926,6 +1147,104 @@ int main(int argc, char** argv)
 		menutext.setString("New Task...");
 		menutext.setPosition(fbx + 12, fby + 6);
 		window.draw(menutext);
+
+
+
+		/* SEARCH BAR */
+		float sbx = tsize.x - searchbox_width;
+		fby = 0;
+
+		menubar.setFillColor(searchbox_hilite.Color());
+		menubar.setSize(sf::Vector2f(searchbox_width, menubar_height - 1));
+		menubar.setPosition(sbx, fby);
+		window.draw(menubar);
+
+		if (searching)
+		{
+			searchbox_outline.SetRGB(255, 160, 0);
+		}
+		else
+		{
+			searchbox_outline.SetRGB(255, 255, 255);
+		}
+		menubar.setOutlineColor(searchbox_outline.Color());
+		menubar.setOutlineThickness(-1.f);
+		menubar.setFillColor(sf::Color(12, 12, 12));
+		menubar.setSize(sf::Vector2f(searchbox_width - 12, menubar_height - 11));
+		menubar.setPosition(sbx + 6, fby + 5);
+		window.draw(menubar);
+		menubar.setOutlineThickness(0);
+
+		sf::Text searchText;
+		searchText.setCharacterSize(menubar_height - 16);
+		searchText.setFont(Mnemosyne::GetFont("exo2"));
+		if (searchString.length() > 0)
+		{
+			searchText.setString(searchString);
+			searchText.setFillColor(sf::Color::White);
+		}
+		else
+		{
+			searchText.setString("Search");
+			searchText.setFillColor(sf::Color(180, 180, 180));
+		}
+		searchText.setPosition(menubar.getPosition().x + 4, menubar.getPosition().y);
+		window.draw(searchText);
+
+		/*
+		menubar.setFillColor(sf::Color(120, 120, 120));
+		menubar.setSize(sf::Vector2f(1.f, menubar_height * .4f));
+		menubar.setPosition(sbx - 1.f, fby + menubar_height * .3f);
+		window.draw(menubar);
+		*/
+
+		if (searchbox_width != searchbox_target_width)
+		{
+			float change = (searchbox_target_width - searchbox_width) * searchbox_speed;
+			if (abs(change) < .01f)
+			{
+				searchbox_width = searchbox_target_width;
+			}
+			else
+			{
+				searchbox_width += change;
+			}
+		}
+
+		if (mouse.gpos.x >= sbx && mouse.gpos.y >= fby && mouse.gpos.x < sbx + searchbox_width && mouse.gpos.y < fby + menubar_height)
+		{
+			searchbox_hilite.SetRGB(64, 64, 64);
+
+			if (mouse.buttons[0] == MouseState::ButtonState::Pressed)
+			{
+				mouse.grabbed_key = GRAB_KEY_MENUBAR;
+				mouse.grabbed_id = 2;
+				mouse.grabbed_id_sub = -1;
+			}
+			else if (mouse.buttons[0] == MouseState::ButtonState::Released)
+			{
+				if (mouse.grabbed_key == GRAB_KEY_MENUBAR && mouse.grabbed_id == 2)
+				{
+					ui_focus = true;
+					searchbox_target_width = tsize.x * .4f;
+				}
+
+				mouse.grabbed_key = GRAB_KEY_MENUBAR;
+				mouse.grabbed_id = 2;
+				mouse.grabbed_id_sub = -1;
+			}
+		}
+		else
+		{
+			searchbox_hilite.SetRGB(40, 40, 40);
+
+			if (mouse.buttons[0] == MouseState::ButtonState::Released && ui_focus && searchbox_target_width > searchbox_min_width)
+			{
+				ui_focus = false;
+				searchbox_target_width = searchbox_min_width;
+			}
+		}
+
 
 
 		window.display();

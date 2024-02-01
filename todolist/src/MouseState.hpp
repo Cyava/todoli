@@ -27,6 +27,8 @@ struct MouseState
 	int grabbed_id = -1;		// what has the mouse grabbed?
 	int grabbed_id_sub = -1;	// in case we're not really sure
 
+	float scrolled_amount = 0.f;
+
 	ButtonState buttons[3];
 
 

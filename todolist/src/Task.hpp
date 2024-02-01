@@ -48,6 +48,8 @@ struct Task
 	bool is_expanding = false;
 	bool has_expanded = false;
 
+	bool hidden_by_filter = false;
+
 	ButtonGroup buttons;
 
 	RenderState renderstate = RenderState::None;
